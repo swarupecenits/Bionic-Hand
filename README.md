@@ -1,4 +1,4 @@
-# mediapipe-robot-arm-controller
+# Bionic-Hand
 A demonstration of using MediaPipe Holistic to create a controller for a robot arm from the shoulder to fingers. 
 
 # Installation
