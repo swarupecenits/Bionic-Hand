@@ -1,0 +1,2 @@
+streamlit>=1.28.0
+# No other dependencies needed - everything runs in the browser!

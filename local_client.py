@@ -1,85 +1,72 @@
 """
-Modular Robot Hand Controller Class
-Extracted from controller.py for use in Streamlit and other applications
+Local Client for Robot Hand Controller
+This script runs on your local machine and handles:
+- Camera capture
+- MediaPipe processing  
+- Serial communication with robot
+
+It connects to the web interface for remote configuration and monitoring.
 """
 
 import cv2
+import mediapipe as mp
 import numpy as np
 from copy import deepcopy
+import argparse
 import struct
 import time
-import threading
-import queue
+import sys
+import requests
+import json
+from threading import Thread, Lock
+import serial
+import serial.tools.list_ports
 
-# Import MediaPipe with error handling
-MEDIAPIPE_AVAILABLE = False
-MEDIAPIPE_ERROR = None
-
+# Try importing camera modules
 try:
-    import mediapipe as mp
-    mp_drawing = mp.solutions.drawing_utils
-    mp_drawing_styles = mp.solutions.drawing_styles
-    mp_pose = mp.solutions.pose
-    mp_hand = mp.solutions.hands
-    mp_holistic = mp.solutions.holistic
-    MEDIAPIPE_AVAILABLE = True
-except Exception as e:
-    MEDIAPIPE_ERROR = str(e)
-    print(f"MediaPipe import error: {e}")
-    mp = None
-    mp_drawing = None
-    mp_drawing_styles = None
-    mp_pose = None
-    mp_hand = None
-    mp_holistic = None
+    import opencv_cam
+    import depthai_cam
+except ImportError:
+    print("Warning: Camera modules not found. Make sure opencv_cam.py and depthai_cam.py are in the same directory.")
+
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+mp_pose = mp.solutions.pose
+mp_hand = mp.solutions.hands
+mp_holistic = mp.solutions.holistic
 
 
-class RobotHandController:
-    def __init__(self, camera_source, serial_port=None, serial_fps=20, lpf_value=0.25, 
-                 enable_serial=False, preview_width=1280, preview_height=720):
-        """
-        Initialize the Robot Hand Controller
-        
-        Args:
-            camera_source: Camera source object (opencv_cam or depthai_cam)
-            serial_port: Serial port name (e.g., 'COM14')
-            serial_fps: Frequency of serial transmissions
-            lpf_value: Low pass filter value (0.0-1.0, 1.0 = no filtering)
-            enable_serial: Enable serial port communication
-            preview_width: Width for preview display
-            preview_height: Height for preview display
-        """
-        self.camera_source = camera_source
+class LocalRobotClient:
+    def __init__(self, serial_port, server_url=None, enable_serial=True, serial_fps=20, lpf_value=0.25):
         self.serial_port = serial_port
+        self.server_url = server_url
+        self.enable_serial = enable_serial
         self.serial_fps = serial_fps
         self.lpf_value = lpf_value
-        self.enable_serial = enable_serial
-        self.preview_width = preview_width
-        self.preview_height = preview_height
         
         self.ser = None
         self.joint_angles = np.zeros(23)
         self.is_valid_frame = False
         self.serial_timestamp = time.time()
         self.running = False
-        self.frame_queue = queue.Queue(maxsize=2)
-        self.latest_frame = None
-        self.frame_lock = threading.Lock()
-        
-        # Statistics
         self.frame_rate = 0.0
-        self.right_elbow_angle = 0.0
-        self.right_shoulder_yaw = 0.0
-        self.right_shoulder_pitch = 0.0
-        self.wrist_rotation = 0.0
         
-        if self.enable_serial and self.serial_port:
+        # Stats for web interface
+        self.stats = {
+            'fps': 0.0,
+            'joint_angles': [],
+            'connected': True,
+            'serial_port': serial_port,
+            'is_valid_frame': False
+        }
+        self.stats_lock = Lock()
+        
+        if self.enable_serial:
             self._init_serial()
     
     def _init_serial(self):
         """Initialize serial port"""
         try:
-            import serial
             self.ser = serial.Serial(
                 port=self.serial_port,
                 baudrate=115200,
@@ -91,9 +78,9 @@ class RobotHandController:
                 dsrdtr=False,
                 timeout=1
             )
-            print(f"Serial port {self.serial_port} opened successfully")
+            print(f"✅ Serial port {self.serial_port} opened successfully")
         except Exception as e:
-            print(f"Failed to open serial port {self.serial_port}: {e}")
+            print(f"❌ Failed to open serial port {self.serial_port}: {e}")
             self.ser = None
     
     def angle(self, a, b, c):
@@ -236,6 +223,10 @@ class RobotHandController:
             joint_angles_int = np.clip(self.joint_angles, 0, 255).astype(int)
             print(f"Angles: {joint_angles_int}")
             self.serial_timestamp = time.time()
+            
+            # Update stats for web interface
+            with self.stats_lock:
+                self.stats['joint_angles'] = joint_angles_int.tolist()
     
     def process_frame(self, image, results):
         """Process a single frame with MediaPipe results"""
@@ -273,8 +264,6 @@ class RobotHandController:
             rel = index - pinky
             if rel[0] < 0:
                 wrist_rotation = 360 - wrist_rotation
-            
-            self.wrist_rotation = wrist_rotation
             
             # Calculate finger angles
             self.calculate_finger_angles(self.joint_angles, hand_points_norm)
@@ -315,10 +304,6 @@ class RobotHandController:
             right_elbow_angle, right_shoulder_yaw, right_shoulder_pitch = \
                 self.calculate_pose_angles(results.pose_world_landmarks)
             
-            self.right_elbow_angle = right_elbow_angle
-            self.right_shoulder_yaw = right_shoulder_yaw
-            self.right_shoulder_pitch = right_shoulder_pitch
-            
             self.joint_angles[19] = right_shoulder_pitch
             self.joint_angles[20] = right_shoulder_yaw
             self.joint_angles[21] = 0.0
@@ -333,38 +318,33 @@ class RobotHandController:
                                self.lpf_value * self.joint_angles
             self.serial_timer_transmit()
         
+        # Update stats
+        with self.stats_lock:
+            self.stats['is_valid_frame'] = self.is_valid_frame
+        
         return image
     
-    def start(self):
-        """Start the controller"""
+    def run(self, camera_source):
+        """Main processing loop"""
         self.running = True
-        if not self.camera_source.start():
-            print("Failed to start camera")
-            return False
-        return True
-    
-    def stop(self):
-        """Stop the controller"""
-        self.running = False
-        self.camera_source.stop()
-        if self.ser:
-            self.ser.close()
-    
-    def get_frame(self):
-        """Get the latest processed frame"""
-        with self.frame_lock:
-            return self.latest_frame
-    
-    def run_loop(self):
-        """Main processing loop - run in separate thread"""
+        
+        print(f"🚀 Starting Robot Hand Controller")
+        print(f"📹 Camera: {type(camera_source).__name__}")
+        print(f"🔌 Serial Port: {self.serial_port}")
+        print(f"📡 Serial Enabled: {self.enable_serial}")
+        
+        if not camera_source.start():
+            print("❌ Failed to start camera")
+            return
+        
         with mp_holistic.Holistic(
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5) as holistic:
             
-            while self.running and self.camera_source.is_opened():
+            while self.running and camera_source.is_opened():
                 frame_time = cv2.getTickCount()
                 
-                success, image = self.camera_source.read_frame()
+                success, image = camera_source.read_frame()
                 if not success:
                     continue
                 
@@ -390,23 +370,107 @@ class RobotHandController:
                     landmark_drawing_spec=mp_drawing_styles.get_default_hand_landmarks_style()
                 )
                 
-                # Resize for display
-                image = cv2.resize(image, (self.preview_width, self.preview_height))
-                
                 # Process frame
                 self.process_frame(image, results)
                 
                 # Calculate frame rate
                 self.frame_rate = cv2.getTickFrequency() / (cv2.getTickCount() - frame_time)
                 
-                # Add FPS overlay
+                # Update stats
+                with self.stats_lock:
+                    self.stats['fps'] = self.frame_rate
+                
+                # Display
+                image = cv2.resize(image, (1280, 720))
                 cv2.rectangle(image, (0, 0), (200, 40), (0, 0, 0), -1)
                 cv2.putText(image, f"FPS: {self.frame_rate:.2f}", (5, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, cv2.LINE_AA)
                 
-                # Flip for selfie view
                 image = cv2.flip(image, 1)
+                cv2.imshow('Robot Hand Controller', image)
                 
-                # Store latest frame
-                with self.frame_lock:
-                    self.latest_frame = image.copy()
+                if cv2.waitKey(1) & 0xFF == 27:  # ESC key
+                    break
+        
+        camera_source.stop()
+        cv2.destroyAllWindows()
+        
+        if self.ser:
+            self.ser.close()
+        
+        print("👋 Controller stopped")
+
+
+def list_serial_ports():
+    """List all available serial ports"""
+    ports = serial.tools.list_ports.comports()
+    return [port.device for port in ports]
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Local Robot Hand Controller Client')
+    parser.add_argument('--serial-port', type=str, default=None, help='Serial port (e.g., COM14)')
+    parser.add_argument('--enable-serial', action='store_true', help='Enable serial communication')
+    parser.add_argument('--serial-fps', type=int, default=20, help='Serial transmission rate')
+    parser.add_argument('--lpf-value', type=float, default=0.25, help='Low pass filter value')
+    parser.add_argument('--force-webcam', action='store_true', help='Force webcam instead of OAK-D')
+    parser.add_argument('--list-ports', action='store_true', help='List available serial ports and exit')
+    args = parser.parse_args()
+    
+    # List ports if requested
+    if args.list_ports:
+        print("\n📡 Available Serial Ports:")
+        ports = list_serial_ports()
+        if ports:
+            for port in ports:
+                print(f"  - {port}")
+        else:
+            print("  No serial ports found")
+        return
+    
+    # Check for serial port
+    if not args.serial_port:
+        print("\n⚠️  No serial port specified!")
+        print("Available ports:")
+        ports = list_serial_ports()
+        if ports:
+            for port in ports:
+                print(f"  - {port}")
+            print(f"\nExample: python local_client.py --serial-port {ports[0]} --enable-serial")
+        else:
+            print("  No serial ports found")
+            print("\nExample: python local_client.py --serial-port COM14 --enable-serial")
+        return
+    
+    # Initialize camera
+    if args.force_webcam:
+        camera = opencv_cam.OpenCVCam(width=1920, height=1080)
+    else:
+        try:
+            camera = depthai_cam.DepthAICam(width=3840, height=2160)
+            if not camera.is_depthai_device_available():
+                print("OAK-D not found, using webcam...")
+                camera = opencv_cam.OpenCVCam(width=1920, height=1080)
+        except:
+            camera = opencv_cam.OpenCVCam(width=1920, height=1080)
+    
+    # Create and run client
+    client = LocalRobotClient(
+        serial_port=args.serial_port,
+        enable_serial=args.enable_serial,
+        serial_fps=args.serial_fps,
+        lpf_value=args.lpf_value
+    )
+    
+    try:
+        client.run(camera)
+    except KeyboardInterrupt:
+        print("\n⚠️  Interrupted by user")
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()

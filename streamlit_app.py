@@ -8,8 +8,21 @@ import cv2
 import numpy as np
 import threading
 import time
-import serial.tools.list_ports
-from robot_controller import RobotHandController, MEDIAPIPE_AVAILABLE
+
+# Try importing serial tools
+try:
+    import serial.tools.list_ports
+    SERIAL_AVAILABLE = True
+except ImportError:
+    SERIAL_AVAILABLE = False
+    serial = None
+
+# Import robot controller and check MediaPipe availability
+try:
+    from robot_controller import RobotHandController, MEDIAPIPE_AVAILABLE, MEDIAPIPE_ERROR
+except ImportError as e:
+    st.error(f"Failed to import robot_controller: {e}")
+    st.stop()
 
 # Try importing camera modules
 try:
@@ -71,6 +84,8 @@ if 'selected_port' not in st.session_state:
 
 def get_available_ports():
     """Get list of available serial ports"""
+    if not SERIAL_AVAILABLE:
+        return []
     ports = serial.tools.list_ports.comports()
     return [port.device for port in ports]
 
@@ -149,20 +164,59 @@ st.markdown('<h1 class="main-header">🤖 Robot Hand Controller</h1>', unsafe_al
 
 # Check if running on Streamlit Cloud (no camera access)
 if not MEDIAPIPE_AVAILABLE:
-    st.error("❌ MediaPipe is not properly installed. Please check the requirements.")
-    st.info("This app requires MediaPipe to be installed. If you're on Streamlit Cloud, camera access is not available.")
+    st.error("❌ MediaPipe is not properly installed or failed to initialize.")
+    if MEDIAPIPE_ERROR:
+        st.code(f"Error: {MEDIAPIPE_ERROR}")
+    
+    st.warning("⚠️ This application requires local execution with hardware access")
+    
+    st.info("""
+    ### 🏠 Running Locally (REQUIRED)
+    
+    This application **cannot run on Streamlit Cloud** because it needs:
+    - 📹 Camera access (webcam or OAK-D)
+    - 🔌 USB serial port for robot communication
+    - 💻 Real-time hardware interaction
+    
+    ### ✅ How to Run for Wireless Control:
+    
+    **On your computer** (with camera and robot connected):
+    ```bash
+    # Activate your environment
+    conda activate mediapipe_env
+    
+    # Run the app
+    streamlit run streamlit_app.py --server.address 0.0.0.0
+    ```
+    
+    **On your phone/tablet/other devices:**
+    1. Connect to the same WiFi network
+    2. Open a web browser
+    3. Navigate to: `http://<your-computer-ip>:8501`
+    
+    **Find your computer's IP:**
+    - Windows: Run `ipconfig` in Command Prompt
+    - Mac/Linux: Run `ifconfig` in Terminal
+    - Look for "IPv4 Address" (e.g., 192.168.1.100)
+    
+    ### 📚 Need Help?
+    See `DEPLOYMENT_GUIDE.md` for detailed instructions.
+    """)
     st.stop()
 
 if not OPENCV_CAM_AVAILABLE and not DEPTHAI_CAM_AVAILABLE:
-    st.warning("⚠️ Camera modules not available. This app requires local execution with camera access.")
+    st.warning("⚠️ Camera modules not available.")
     st.info("""
-    ### Running Locally
+    ### Camera Modules Required
     
-    This application requires:
-    - A connected camera (webcam or OAK-D)
-    - Local execution (cannot run on Streamlit Cloud)
+    The camera interface modules (`opencv_cam.py` and `depthai_cam.py`) are not available.
     
-    To run locally:
+    Make sure you're running this locally with all the required files:
+    - `opencv_cam.py`
+    - `depthai_cam.py`
+    - `robot_controller.py`
+    
+    **To run locally:**
     ```bash
     streamlit run streamlit_app.py --server.address 0.0.0.0
     ```
