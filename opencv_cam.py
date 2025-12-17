@@ -1,6 +1,6 @@
 """OpenCV Camera Manager"""
-__author__ = "Trent Shumay"
-__date__ = "2023-05-20"
+__author__ = "Swarup Chanda"
+__date__ = "2025-11-22"
 __version__ = "0.1.0"
 __license__ = "MIT"
 __status__ = "Prototype"
