@@ -78,22 +78,30 @@ def start_controller():
     """Initialize and start the controller"""
     try:
         # Initialize camera
-        if st.session_state.use_oakd and not st.session_state.force_webcam:
+        if st.session_state.use_oakd and not st.session_state.force_webcam and DEPTHAI_CAM_AVAILABLE:
             camera = depthai_cam.DepthAICam(
                 width=st.session_state.oakd_width,
                 height=st.session_state.oakd_height
             )
             if not camera.is_depthai_device_available():
                 st.warning("OAK-D camera not found, falling back to webcam")
+                if OPENCV_CAM_AVAILABLE:
+                    camera = opencv_cam.OpenCVCam(
+                        width=st.session_state.webcam_width,
+                        height=st.session_state.webcam_height
+                    )
+                else:
+                    st.error("No camera module available")
+                    return False
+        else:
+            if OPENCV_CAM_AVAILABLE:
                 camera = opencv_cam.OpenCVCam(
                     width=st.session_state.webcam_width,
                     height=st.session_state.webcam_height
                 )
-        else:
-            camera = opencv_cam.OpenCVCam(
-                width=st.session_state.webcam_width,
-                height=st.session_state.webcam_height
-            )
+            else:
+                st.error("OpenCV camera module not available")
+                return False
         
         # Initialize controller
         st.session_state.controller = RobotHandController(
@@ -138,6 +146,30 @@ def stop_controller():
 
 # Header
 st.markdown('<h1 class="main-header">🤖 Robot Hand Controller</h1>', unsafe_allow_html=True)
+
+# Check if running on Streamlit Cloud (no camera access)
+if not MEDIAPIPE_AVAILABLE:
+    st.error("❌ MediaPipe is not properly installed. Please check the requirements.")
+    st.info("This app requires MediaPipe to be installed. If you're on Streamlit Cloud, camera access is not available.")
+    st.stop()
+
+if not OPENCV_CAM_AVAILABLE and not DEPTHAI_CAM_AVAILABLE:
+    st.warning("⚠️ Camera modules not available. This app requires local execution with camera access.")
+    st.info("""
+    ### Running Locally
+    
+    This application requires:
+    - A connected camera (webcam or OAK-D)
+    - Local execution (cannot run on Streamlit Cloud)
+    
+    To run locally:
+    ```bash
+    streamlit run streamlit_app.py --server.address 0.0.0.0
+    ```
+    
+    Then access from other devices at: `http://<your-ip>:8501`
+    """)
+    st.stop()
 
 # Sidebar - Configuration
 with st.sidebar:
