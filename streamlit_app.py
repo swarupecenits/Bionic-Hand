@@ -9,9 +9,22 @@ import numpy as np
 import threading
 import time
 import serial.tools.list_ports
-from robot_controller import RobotHandController
-import opencv_cam
-import depthai_cam
+from robot_controller import RobotHandController, MEDIAPIPE_AVAILABLE
+
+# Try importing camera modules
+try:
+    import opencv_cam
+    OPENCV_CAM_AVAILABLE = True
+except ImportError:
+    OPENCV_CAM_AVAILABLE = False
+    opencv_cam = None
+
+try:
+    import depthai_cam
+    DEPTHAI_CAM_AVAILABLE = True
+except ImportError:
+    DEPTHAI_CAM_AVAILABLE = False
+    depthai_cam = None
 
 # Page configuration
 st.set_page_config(

@@ -4,7 +4,6 @@ Extracted from controller.py for use in Streamlit and other applications
 """
 
 import cv2
-import mediapipe as mp
 import numpy as np
 from copy import deepcopy
 import struct
@@ -12,11 +11,24 @@ import time
 import threading
 import queue
 
-mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
-mp_pose = mp.solutions.pose
-mp_hand = mp.solutions.hands
-mp_holistic = mp.solutions.holistic
+# Import MediaPipe with error handling
+try:
+    import mediapipe as mp
+    mp_drawing = mp.solutions.drawing_utils
+    mp_drawing_styles = mp.solutions.drawing_styles
+    mp_pose = mp.solutions.pose
+    mp_hand = mp.solutions.hands
+    mp_holistic = mp.solutions.holistic
+    MEDIAPIPE_AVAILABLE = True
+except (ImportError, AttributeError) as e:
+    print(f"MediaPipe import error: {e}")
+    MEDIAPIPE_AVAILABLE = False
+    mp = None
+    mp_drawing = None
+    mp_drawing_styles = None
+    mp_pose = None
+    mp_hand = None
+    mp_holistic = None
 
 
 class RobotHandController:

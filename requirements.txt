@@ -1,6 +1,6 @@
-blobconverter>=1.4.1
+mediapipe==0.10.9
+opencv-contrib-python-headless==4.8.1.78
+numpy<2.0.0
+streamlit>=1.28.0
 pyserial>=3.5
-opencv-python-headless
-mediapipe
-numpy
-streamlit
+protobuf>=3.20.0,<4.0.0
